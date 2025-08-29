@@ -1,0 +1,10 @@
+[
+  {
+    "type": "MOD_INFO",
+    "id": "example_mod",
+    "name": "Example Mod",
+    "description": "A demonstration mod.",
+    "category": "misc_additions",
+    "dependencies": []
+  }
+]
