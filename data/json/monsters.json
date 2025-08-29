@@ -1,0 +1,11 @@
+[
+  {
+    "type": "MONSTER",
+    "id": "example_monster",
+    "name": "Example Monster",
+    "hp": 10,
+    "speed": 100,
+    "difficulty": 1,
+    "description": "An example monster for demonstration."
+  }
+]
