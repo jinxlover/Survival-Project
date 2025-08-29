@@ -1,0 +1,13 @@
+[
+  {
+    "type": "recipe",
+    "id": "example_recipe",
+    "result": "example_item",
+    "skill_used": "fabrication",
+    "difficulty": 1,
+    "time": "5 m",
+    "components": [
+      [ [ "example_item", 1 ] ]
+    ]
+  }
+]
