@@ -52,6 +52,87 @@ struct Player {
 };
 
 /**
+ * Recipe structure representing a craftable recipe loaded from JSON.
+ * Each recipe has an id, a resulting item id, and a list of
+ * component requirements (item id and quantity).
+ */
+struct Recipe {
+    std::string id;
+    std::string result;
+    std::vector<std::pair<std::string, int>> components;
+};
+
+/**
+ * Load recipes from a JSON file. This parser is simplistic and only
+ * extracts the "id", "result", and first level of components
+ * (assumes each component entry is a two‑element array [ [ "id", qty ] ]).
+ */
+std::vector<Recipe> load_recipes(const std::string &filename) {
+    std::vector<Recipe> recipes;
+    std::ifstream f(filename);
+    if (!f) {
+        std::cerr << "Failed to open " << filename << std::endl;
+        return recipes;
+    }
+    Recipe current;
+    std::string line;
+    while (std::getline(f, line)) {
+        // Trim leading spaces
+        auto pos = line.find_first_not_of(" \t");
+        if (pos == std::string::npos) continue;
+        std::string trimmed = line.substr(pos);
+        // New recipe when encountering '{'
+        if (trimmed.find("{") != std::string::npos) {
+            current = Recipe();
+        }
+        // Parse id
+        auto id_pos = trimmed.find("\"id\"");
+        if (id_pos != std::string::npos) {
+            auto colon = trimmed.find(':', id_pos);
+            auto q1 = trimmed.find('"', colon + 1);
+            auto q2 = trimmed.find('"', q1 + 1);
+            if (q1 != std::string::npos && q2 != std::string::npos) {
+                current.id = trimmed.substr(q1 + 1, q2 - q1 - 1);
+            }
+        }
+        // Parse result
+        auto res_pos = trimmed.find("\"result\"");
+        if (res_pos != std::string::npos) {
+            auto colon = trimmed.find(':', res_pos);
+            auto q1 = trimmed.find('"', colon + 1);
+            auto q2 = trimmed.find('"', q1 + 1);
+            if (q1 != std::string::npos && q2 != std::string::npos) {
+                current.result = trimmed.substr(q1 + 1, q2 - q1 - 1);
+            }
+        }
+        // Parse components entry lines like [ [ "id", qty ] ]
+        // We'll look for two quotes and a comma separating quantity
+        if (trimmed.find("[ [") != std::string::npos) {
+            auto q1 = trimmed.find('"');
+            auto q2 = trimmed.find('"', q1 + 1);
+            if (q1 != std::string::npos && q2 != std::string::npos) {
+                std::string comp_id = trimmed.substr(q1 + 1, q2 - q1 - 1);
+                // Find quantity after comma
+                auto comma = trimmed.find(',', q2);
+                if (comma != std::string::npos) {
+                    std::string qty_str = trimmed.substr(comma + 1);
+                    int qty = std::stoi(qty_str);
+                    current.components.emplace_back(comp_id, qty);
+                }
+            }
+        }
+        // When encountering '}', push current recipe if it has id and result
+        if (trimmed.find("}") != std::string::npos) {
+            if (!current.id.empty() && !current.result.empty()) {
+                recipes.push_back(current);
+                current = Recipe();
+            }
+        }
+    }
+    return recipes;
+}
+
+/**
  * Load items from the given JSON file. This function performs a very
  * simplistic parse that extracts the value of the "id" field and
  * the "str" field under the "name" object. Each complete item is
@@ -104,15 +185,18 @@ int main() {
     for (const auto &item : world_items) {
         std::cout << " - " << item.id << ": " << item.name << std::endl;
     }
+    // Load recipes from JSON
+    std::vector<Recipe> recipes = load_recipes("data/json/recipes.json");
     // Create the player
     Player player;
     // Command loop
     std::cout << "\nAvailable commands:\n"
-              << " - list items    : list items available in the world\n"
-              << " - inventory     : list items in your inventory\n"
-              << " - take <id>     : pick up an item from the world\n"
-              << " - drop <id>     : drop an item from your inventory\n"
-              << " - quit          : exit the game\n";
+              << " - list items      : list items available in the world\n"
+              << " - inventory       : list items in your inventory\n"
+              << " - take <id>       : pick up an item from the world\n"
+              << " - drop <id>       : drop an item from your inventory\n"
+              << " - craft <recipe>  : craft an item using a recipe\n"
+              << " - quit            : exit the game\n";
     std::string line;
     while (true) {
         std::cout << "\nEnter command: ";
@@ -124,12 +208,11 @@ int main() {
         if (start == std::string::npos) {
             continue;
         }
+        std::istringstream iss(line);
         std::string command;
         std::string arg;
-        std::istringstream iss(line);
         iss >> command;
         std::getline(iss, arg);
-        // Remove leading space from arg
         if (!arg.empty() && arg[0] == ' ') arg.erase(0, 1);
         if (command == "quit") {
             break;
@@ -181,8 +264,69 @@ int main() {
             } else {
                 std::cout << "Item '" << arg << "' not found in your inventory." << std::endl;
             }
+        } else if (command == "craft") {
+            if (arg.empty()) {
+                std::cout << "Usage: craft <recipe id>" << std::endl;
+                continue;
+            }
+            // Find recipe by id
+            const Recipe *selected = nullptr;
+            for (const auto &rec : recipes) {
+                if (rec.id == arg) {
+                    selected = &rec;
+                    break;
+                }
+            }
+            if (!selected) {
+                std::cout << "Recipe '" << arg << "' not found." << std::endl;
+                continue;
+            }
+            // Check if player has required components
+            bool can_craft = true;
+            std::vector<Item> removed_items;
+            for (const auto &req : selected->components) {
+                const std::string &comp_id = req.first;
+                int qty_needed = req.second;
+                int qty_found = 0;
+                // Remove items up to qty_needed
+                for (int i = 0; i < qty_needed; ++i) {
+                    Item removed;
+                    if (player.remove_item(comp_id, removed)) {
+                        removed_items.push_back(removed);
+                        qty_found++;
+                    } else {
+                        break;
+                    }
+                }
+                if (qty_found < qty_needed) {
+                    can_craft = false;
+                    // Return removed items back to inventory
+                    for (const auto &itm : removed_items) {
+                        player.add_item(itm);
+                    }
+                    break;
+                }
+            }
+            if (!can_craft) {
+                std::cout << "You don't have the required components to craft '" << selected->id << "'." << std::endl;
+            } else {
+                // Add result item to inventory. Try to find an existing item definition
+                auto it = std::find_if(world_items.begin(), world_items.end(), [&](const Item &itm) {
+                    return itm.id == selected->result;
+                });
+                Item crafted;
+                if (it != world_items.end()) {
+                    crafted = *it;
+                } else {
+                    // If not found in world_items, create a generic item with id as name
+                    crafted.id = selected->result;
+                    crafted.name = selected->result;
+                }
+                player.add_item(crafted);
+                std::cout << "You craft a " << crafted.name << "!" << std::endl;
+            }
         } else {
-            std::cout << "Unknown command. Type 'list items', 'inventory', 'take <id>', 'drop <id>', or 'quit'." << std::endl;
+            std::cout << "Unknown command. Type 'list items', 'inventory', 'take <id>', 'drop <id>', 'craft <recipe>', or 'quit'." << std::endl;
         }
     }
     std::cout << "Goodbye!" << std::endl;
