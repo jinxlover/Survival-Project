@@ -1,0 +1,10 @@
+[
+  {
+    "type": "GENERIC",
+    "id": "modded_item",
+    "name": { "str": "Modded Item" },
+    "weight": 200,
+    "volume": "150 ml",
+    "material": ["steel"]
+  }
+]
