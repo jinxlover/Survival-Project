@@ -1,0 +1,11 @@
+[
+  {
+    "type": "GENERIC",
+    "id": "example_item",
+    "name": { "str": "Example Item" },
+    "weight": 500,
+    "volume": "250 ml",
+    "description": "An example item to demonstrate JSON loading.",
+    "material": ["plastic"]
+  }
+]
