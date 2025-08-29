@@ -15,10 +15,26 @@
 #include <vector>
 #include <filesystem>
 #include <sstream>
+#include <random>
 
 struct Item {
     std::string id;
     std::string name;
+};
+
+/**
+ * Structure representing a monster definition loaded from JSON.
+ * Monsters have an identifier, a display name, hit points (hp) and
+ * simple combat attributes.  This struct is intentionally simple and
+ * supports only the fields parsed by load_monsters() below.
+ */
+struct Monster {
+    std::string id;
+    std::string name;
+    int hp = 0;
+    int melee_dice = 0;
+    int melee_dice_sides = 0;
+    int armor = 0;
 };
 
 /**
@@ -27,6 +43,12 @@ struct Item {
  */
 struct Player {
     std::vector<Item> inventory;
+
+    /**
+     * Hit points representing the player's health in combat. The player
+     * starts with 100 hp and loses hp when taking damage from monsters.
+     */
+    int hp = 100;
 
     /**
      * Add an item to the player's inventory.
@@ -133,6 +155,94 @@ std::vector<Recipe> load_recipes(const std::string &filename) {
 }
 
 /**
+ * Load monsters from a JSON file. This parser reads each monster
+ * definition and extracts basic combat attributes. It is line‑based
+ * and similar to load_items and load_recipes, so it should be easy
+ * to extend if more fields are needed. Each monster requires an
+ * "id" field, a "name" object with a "str" subfield, and an "hp"
+ * field. Optional fields include "melee_dice", "melee_dice_sides"
+ * and "armor".
+ */
+std::vector<Monster> load_monsters(const std::string &filename) {
+    std::vector<Monster> monsters;
+    std::ifstream f(filename);
+    if (!f) {
+        std::cerr << "Failed to open " << filename << std::endl;
+        return monsters;
+    }
+    Monster current;
+    bool in_object = false;
+    std::string line;
+    auto trim = [](const std::string &s) {
+        size_t start = s.find_first_not_of(" \t\n\r");
+        size_t end = s.find_last_not_of(" \t\n\r");
+        if (start == std::string::npos || end == std::string::npos) return std::string();
+        return s.substr(start, end - start + 1);
+    };
+    auto extract_string_value = [&](const std::string &s) -> std::string {
+        auto colon = s.find(':');
+        if (colon == std::string::npos) return "";
+        std::string value = s.substr(colon + 1);
+        // remove commas
+        value.erase(std::remove(value.begin(), value.end(), ','), value.end());
+        // find first and last quote
+        size_t q1 = value.find('"');
+        size_t q2 = value.find_last_of('"');
+        if (q1 != std::string::npos && q2 != std::string::npos && q2 > q1) {
+            return value.substr(q1 + 1, q2 - q1 - 1);
+        }
+        // fallback: trim
+        return trim(value);
+    };
+    auto extract_int_value = [&](const std::string &s) -> int {
+        auto colon = s.find(':');
+        if (colon == std::string::npos) return 0;
+        std::string value = s.substr(colon + 1);
+        value.erase(std::remove(value.begin(), value.end(), ','), value.end());
+        value.erase(0, value.find_first_not_of(" \t"));
+        try {
+            return std::stoi(value);
+        } catch (...) {
+            return 0;
+        }
+    };
+    while (std::getline(f, line)) {
+        std::string t = trim(line);
+        if (t.empty() || t == "[" || t == "]") continue;
+        if (t.find('{') != std::string::npos) {
+            in_object = true;
+            current = Monster();
+            continue;
+        }
+        if (t.find('}') != std::string::npos) {
+            if (in_object) {
+                // push only if id and name have been set
+                if (!current.id.empty() && !current.name.empty()) {
+                    monsters.push_back(current);
+                }
+                in_object = false;
+            }
+            continue;
+        }
+        if (!in_object) continue;
+        if (t.find("\"id\"") != std::string::npos) {
+            current.id = extract_string_value(t);
+        } else if (t.find("\"name\"") != std::string::npos && t.find("\"str\"") != std::string::npos) {
+            current.name = extract_string_value(t);
+        } else if (t.find("\"hp\"") != std::string::npos) {
+            current.hp = extract_int_value(t);
+        } else if (t.find("\"melee_dice_sides\"") != std::string::npos) {
+            current.melee_dice_sides = extract_int_value(t);
+        } else if (t.find("\"melee_dice\"") != std::string::npos) {
+            current.melee_dice = extract_int_value(t);
+        } else if (t.find("\"armor\"") != std::string::npos) {
+            current.armor = extract_int_value(t);
+        }
+    }
+    return monsters;
+}
+
+/**
  * Load items from the given JSON file. This function performs a very
  * simplistic parse that extracts the value of the "id" field and
  * the "str" field under the "name" object. Each complete item is
@@ -187,6 +297,12 @@ int main() {
     }
     // Load recipes from JSON
     std::vector<Recipe> recipes = load_recipes("data/json/recipes.json");
+    // Load monsters from JSON. These creatures are available to fight.
+    std::vector<Monster> monsters = load_monsters("data/json/monsters.json");
+    std::cout << "Loaded " << monsters.size() << " monster(s)." << std::endl;
+    for (const auto &m : monsters) {
+        std::cout << " - " << m.id << ": " << m.name << " (hp=" << m.hp << ")" << std::endl;
+    }
     // Create the player
     Player player;
     // Command loop
@@ -196,6 +312,8 @@ int main() {
               << " - take <id>       : pick up an item from the world\n"
               << " - drop <id>       : drop an item from your inventory\n"
               << " - craft <recipe>  : craft an item using a recipe\n"
+              << " - list monsters   : list monsters in the world\n"
+              << " - fight <id>      : fight a monster\n"
               << " - quit            : exit the game\n";
     std::string line;
     while (true) {
@@ -325,8 +443,69 @@ int main() {
                 player.add_item(crafted);
                 std::cout << "You craft a " << crafted.name << "!" << std::endl;
             }
+        } else if (command == "list" && arg == "monsters") {
+            if (monsters.empty()) {
+                std::cout << "There are no monsters in the world." << std::endl;
+            } else {
+                std::cout << "Monsters:" << std::endl;
+                for (const auto &m : monsters) {
+                    std::cout << " - " << m.id << ": " << m.name << " (hp=" << m.hp << ")" << std::endl;
+                }
+            }
+        } else if (command == "fight") {
+            if (arg.empty()) {
+                std::cout << "Usage: fight <monster id>" << std::endl;
+                continue;
+            }
+            // Find monster by id
+            auto it_mon = std::find_if(monsters.begin(), monsters.end(), [&](const Monster &m) {
+                return m.id == arg;
+            });
+            if (it_mon == monsters.end()) {
+                std::cout << "Monster '" << arg << "' not found." << std::endl;
+                continue;
+            }
+            Monster enemy = *it_mon;
+            std::cout << "You engage the " << enemy.name << "!" << std::endl;
+            // Simple combat loop
+            while (player.hp > 0 && enemy.hp > 0) {
+                // Player attacks first
+                int damage = 1;
+                std::string weapon_name = "fists";
+                if (!player.inventory.empty()) {
+                    const Item &weapon = player.inventory.front();
+                    // Determine damage by summing simple fields. We don't have bashing/cutting separate,
+                    // so assign a default of 5 per item as an example. In a full game this would come
+                    // from item data. Here we check if the id contains "knife" or other hints.
+                    damage = 5;
+                    weapon_name = weapon.name;
+                }
+                enemy.hp -= damage;
+                std::cout << "You hit the " << enemy.name << " with your " << weapon_name
+                          << ", dealing " << damage << " damage. (monster hp=" << (enemy.hp > 0 ? enemy.hp : 0) << ")" << std::endl;
+                if (enemy.hp <= 0) {
+                    std::cout << "You defeated the " << enemy.name << "!" << std::endl;
+                    break;
+                }
+                // Monster attacks
+                int monster_damage = enemy.melee_dice * enemy.melee_dice_sides;
+                if (monster_damage <= 0) {
+                    monster_damage = 1;
+                }
+                player.hp -= monster_damage;
+                std::cout << "The " << enemy.name << " hits you, dealing " << monster_damage
+                          << " damage. (your hp=" << (player.hp > 0 ? player.hp : 0) << ")" << std::endl;
+                if (player.hp <= 0) {
+                    std::cout << "You were killed by the " << enemy.name << "..." << std::endl;
+                    break;
+                }
+            }
+            if (player.hp <= 0) {
+                // Game over
+                break;
+            }
         } else {
-            std::cout << "Unknown command. Type 'list items', 'inventory', 'take <id>', 'drop <id>', 'craft <recipe>', or 'quit'." << std::endl;
+            std::cout << "Unknown command. Type 'list items', 'list monsters', 'inventory', 'take <id>', 'drop <id>', 'craft <recipe>', 'fight <id>' or 'quit'." << std::endl;
         }
     }
     std::cout << "Goodbye!" << std::endl;
